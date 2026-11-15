@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Run the pinned installed Hermes executable against a disposable root.
+# Usage: HX_ROOT=<disposable dir> harness/hx <hermes args...>
+set -euo pipefail
+: "${HX_ROOT:?set HX_ROOT to a disposable directory}"
+W="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HERMES_SRC="${HERMES_SRC:-$HOME/.hermes/hermes-agent}"
+HX_ROOT="$(realpath -m -- "$HX_ROOT")"   # resolves .. and symlinks before the check
+case "$HX_ROOT" in "$(realpath -m -- "$W/sandbox")"/?*) ;; *) echo "HX_ROOT outside sandbox" >&2; exit 2;; esac
+HX_EXEC="$HERMES_SRC/venv/bin/python"
+mkdir -p "$HX_ROOT"/{home/.hermes,xdg/config,xdg/cache,xdg/data,xdg/state,tmp}
+exec /usr/bin/env -i \
+  HOME="$HX_ROOT/home" HERMES_HOME="$HX_ROOT/home/.hermes" \
+  XDG_CONFIG_HOME="$HX_ROOT/xdg/config" XDG_CACHE_HOME="$HX_ROOT/xdg/cache" \
+  XDG_DATA_HOME="$HX_ROOT/xdg/data" XDG_STATE_HOME="$HX_ROOT/xdg/state" \
+  TMPDIR="$HX_ROOT/tmp" PATH="${HX_PATH_PREFIX:+$HX_PATH_PREFIX:}/usr/local/bin:/usr/bin:/bin" \
+  LANG=C.UTF-8 TERM=dumb PYTHONDONTWRITEBYTECODE=1 HERMES_ENABLE_PROJECT_PLUGINS=0 \
+  CODEX_HOME="$HX_ROOT/home/.codex" HERMES_SRC="$HERMES_SRC" \
+  ${HX_EXTRA_ENV:-} \
+  "$HX_EXEC" "$@"

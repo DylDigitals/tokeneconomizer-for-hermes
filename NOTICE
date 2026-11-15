@@ -1,0 +1,10 @@
+TokenEconomizer for Hermes Agent
+Copyright 2026 the tokeneconomizer-for-hermes authors
+
+This repository includes a modified copy of TokenEconomizer
+(https://github.com/microsoft/TokenEconomizer, commit
+7042ea89dd5e5ecbc67ad865ad6e256e61be8bf0), licensed under the Apache License,
+Version 2.0. The copy is under plugin/tokeneconomizer/_vendor/ with upstream's
+license file. Every change to it is listed in
+plugin/tokeneconomizer/_vendor/PATCHES.md and marked in the code with
+"[hermes patch Pn]".

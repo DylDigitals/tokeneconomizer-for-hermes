@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Guard the real install while sandbox runs execute. `check-live snapshot` records it at the
+# start of a run; `check-live` compares against that. Exit 1 on drift.
+set -uo pipefail
+W="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HERMES_SRC="${HERMES_SRC:-$HOME/.hermes/hermes-agent}"
+S="$W/sandbox/live-state.snapshot"
+state() {
+  echo "hermes-agent $(cd "$HERMES_SRC" && { git rev-parse HEAD; git status --porcelain; git diff; } | sha256sum | cut -d' ' -f1)"
+  # Hermes-host state in the shared root: a sandbox run must never add to it.
+  echo "te-hermes $(ls -d ~/.tokeneconomizer/repos/*/hermes 2>/dev/null | tr '\n' ' ')"
+}
+if [ "${1:-}" = snapshot ]; then mkdir -p "$W/sandbox"; state > "$S"; exit 0; fi
+[ -f "$S" ] || { echo "no snapshot: run harness/check-live snapshot first"; exit 1; }
+rc=0; now=$(state)
+same() { [ "$(grep "^$1 " "$S")" = "$(echo "$now" | grep "^$1 ")" ]; }
+same hermes-agent || { echo "DRIFT hermes-agent source"; rc=1; }
+same te-hermes || { echo "LEAK hermes host state in live ~/.tokeneconomizer"; rc=1; }
+for e in /proc/[0-9]*/environ; do { tr "\0" "\n" < "$e"; } 2>/dev/null | grep -q "^HERMES_HOME=$W/sandbox" && { echo "sandbox process still running: ${e%/environ}"; rc=1; }; done
+[ $rc = 0 ] && echo "live-state OK $(date -Is)"
+exit $rc

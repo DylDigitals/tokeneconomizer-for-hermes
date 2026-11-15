@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Deterministic candidate identity: sha256 of every distributable/test/harness file.
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+find plugin tests harness INSTALL.md MATRIX.md -type f -not -path '*/__pycache__/*' -not -name '*.pyc' | LC_ALL=C sort | xargs sha256sum

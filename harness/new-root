@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Create a disposable Hermes root with the plugin installed (copied) and enabled.
+# Usage: harness/new-root <name> [--no-plugin]   → prints the root path
+set -euo pipefail
+W="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+case "${1:-}" in ''|.|..|*/*) echo "new-root: give a plain folder name, no '/'" >&2; exit 2;; esac
+# Test model: any OpenAI-compatible endpoint, named by three variables in the caller's
+# environment. Only that key goes into the sandbox's .env (never printed); nothing else from the
+# real Hermes home reaches the sandbox. Checked before anything is deleted.
+M="set TE_TEST_BASE_URL, TE_TEST_MODEL and TE_TEST_API_KEY (README: Tests)"
+: "${TE_TEST_BASE_URL:?$M}" "${TE_TEST_MODEL:?$M}" "${TE_TEST_API_KEY:?$M}"
+[ -L "$W/sandbox" ] && { echo "new-root: sandbox/ is a symlink" >&2; exit 2; }
+R="$W/sandbox/$1"
+[ -L "$R" ] && rm -f "$R"
+[ -d "$R" ] && chmod -R u+w "$R"; rm -rf "$R"; mkdir -p "$R/home/.hermes/plugins" "$R/repo"
+if [ "${2:-}" != "--no-plugin" ]; then cp -r "$W/plugin/tokeneconomizer" "$R/home/.hermes/plugins/"; chmod -R u+w "$R/home/.hermes/plugins"; fi
+( umask 077; printf 'TE_TEST_API_KEY=%s\n' "$TE_TEST_API_KEY" > "$R/home/.hermes/.env" )
+cat > "$R/home/.hermes/config.yaml" <<YAML
+model:
+  default: ${HX_MODEL:-$TE_TEST_MODEL}
+  provider: ${TE_TEST_PROVIDER:-te-test}
+providers:
+  ${TE_TEST_PROVIDER:-te-test}:
+    base_url: $TE_TEST_BASE_URL
+    key_env: TE_TEST_API_KEY
+toolsets:
+  - hermes-cli
+agent:
+  max_turns: 30
+terminal:
+  cwd: $R/repo
+telemetry:
+  shared_metrics:
+    enabled: false
+    send: false
+    offer_version: 2
+YAML
+# HX_WITH_CHISLE=1: also install the Chisle plugin, copied from TE_CHISLE_PLUGIN (an installed
+# Chisle Hermes plugin directory); its helper needs node (HX_PATH_PREFIX: a directory holding it).
+if [ "${HX_WITH_CHISLE:-}" = 1 ]; then
+  cp -r "${TE_CHISLE_PLUGIN:?set TE_CHISLE_PLUGIN to an installed Chisle Hermes plugin directory}" "$R/home/.hermes/plugins/chisle"
+  chmod -R u+w "$R/home/.hermes/plugins/chisle"
+  HX_ROOT="$R" "$W/harness/hx" plugins enable chisle --no-allow-tool-override >/dev/null 2>&1 || HX_ROOT="$R" "$W/harness/hx" plugins enable chisle </dev/null >/dev/null 2>&1
+fi
+if [ "${2:-}" != "--no-plugin" ]; then HX_ROOT="$R" "$W/harness/hx" plugins enable tokeneconomizer --no-allow-tool-override >/dev/null 2>&1 || HX_ROOT="$R" "$W/harness/hx" plugins enable tokeneconomizer </dev/null >/dev/null 2>&1; fi
+echo "$R"

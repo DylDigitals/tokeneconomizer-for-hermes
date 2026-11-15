@@ -1,0 +1,237 @@
+#!/usr/bin/python3
+"""One command to check TokenEconomizer on Hermes.
+
+    harness/te-test                  offline: the real plugin code with a fake model (~5 s, free)
+    harness/te-test live [profile]   health of the installed plugin; changes no settings
+                                     (default: the default profile, ~/.hermes)
+    harness/te-test real [feature…]  real Hermes sessions in throwaway sandboxes on a cheap
+                                     test model; no feature = all of them (30-45 min).
+                                     Needs TE_TEST_BASE_URL, TE_TEST_MODEL, TE_TEST_API_KEY
+                                     (an OpenAI-compatible endpoint). Optional features:
+                                     repomap needs TE_REPOMAP_PYTHON, chisle needs
+                                     TE_CHISLE_PLUGIN and node.
+
+Hermes is found at ~/.hermes/hermes-agent; set HERMES_SRC if its source directory is elsewhere.
+    harness/te-test list             the features `real` accepts
+
+Exit code 0 only when every check passed. `real` never writes to a live profile; `live` changes no settings or learned facts.
+"""
+import collections
+import json
+import os
+import re
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(HERE)
+HERMES_SRC = os.environ.get("HERMES_SRC") or os.path.expanduser("~/.hermes/hermes-agent")
+HERMES_PY = f"{HERMES_SRC}/venv/bin/python"
+
+# feature -> (acceptance area, what a real run proves)
+FEATURES = {
+    "install":    ("A1", "plugin registers, `/te` commands answer, bundled skill loads"),
+    "facts":      ("A2", "a fact is learned from repeated sessions and reaches later ones once"),
+    "pruning":    ("A2", "unused tools are proposed, left out after apply, given back on restore"),
+    "guard":      ("A2", "a turn stuck in a failing loop gets one redirect and is never stopped"),
+    "accounting": ("A2", "the plugin's token ledger equals Hermes's own usage report"),
+    "compaction": ("A2c", "learned facts are put back once after Hermes compacts a session"),
+    "mcp":        ("A3", "automatic pruning after idle time; MCP and deferred tools"),
+    "profiles":   ("A5", "two profiles in one process stay separate"),
+    "repomap":    ("A7", "the optional repository map is added once and used"),
+    "subagents":  ("A8", "sub-agent tool use and tokens count toward the parent; measure; pause"),
+    "gateway":    ("A8g", "a gateway session is tracked and pruned; tool search hides denied tools"),
+    "segments":   ("A9", "a session learns into each repository it runs commands in"),
+    "chisle":     ("chisle", "the guard's redirect survives when Chisle compresses the same result"),
+}
+# The label each acceptance check carries -> the feature it belongs to, in plain words.
+GROUPS = {"A1": "Install and /te commands", "A2": "Learned facts", "A3": "Tool pruning",
+          "A4": "Loop guard", "A5": "Profile isolation, live state untouched",
+          "A6": "Token accounting", "A7": "Repository map",
+          "A8": "Sub-agents, measurement, paused optimizer, gateway",
+          "A9": "Per-project learning",
+          "chisle": "Works beside Chisle", "live": "Installed plugin"}
+
+
+def summary(results):
+    """Print one line per feature and each failed check; return the process exit code."""
+    by = collections.defaultdict(list)
+    for group, name, ok in results:
+        by[group].append((name, ok))
+    for group, checks in by.items():
+        bad = [n for n, ok in checks if not ok]
+        print(f"{'ok  ' if not bad else 'FAIL'} {GROUPS.get(group, group)}: "
+              f"{len(checks) - len(bad)}/{len(checks)}")
+        for n in bad:
+            print(f"       failed: {n}")
+    n_bad = sum(not ok for _, _, ok in results)
+    print(f"== {len(results) - n_bad} passed, {n_bad} failed")
+    return 1 if n_bad or not results else 0
+
+
+def offline():
+    with tempfile.TemporaryDirectory() as home:
+        p = subprocess.run(["/usr/bin/env", "-i", f"HOME={home}", "PATH=/usr/bin:/bin",
+                            f"TMPDIR={home}", f"HERMES_SRC={HERMES_SRC}", HERMES_PY, "-m", "pytest", "-q",
+                            "-p", "no:cacheprovider", "tests"],
+                           cwd=REPO, capture_output=True, text=True)
+    lines = [l for l in p.stdout.splitlines() if l.startswith(("FAILED", "ERROR"))]
+    print("\n".join(lines + p.stdout.strip().splitlines()[-1:]))
+    return p.returncode
+
+
+def real(names):
+    unknown = [n for n in names if n not in FEATURES]
+    if unknown:
+        sys.exit(f"unknown feature: {' '.join(unknown)} (see `harness/te-test list`)")
+    missing = [v for v in ("TE_TEST_BASE_URL", "TE_TEST_MODEL", "TE_TEST_API_KEY")
+               if not os.environ.get(v)]
+    if missing:
+        sys.exit(f"`real` needs a test model: set {', '.join(missing)}")
+    # Optional features need extra setup: skipped in a full run, an error when asked for by name.
+    node = shutil.which("node")
+    needs = {"repomap": [] if os.environ.get("TE_REPOMAP_PYTHON") else ["TE_REPOMAP_PYTHON"],
+             "chisle": ([] if os.environ.get("TE_CHISLE_PLUGIN") else ["TE_CHISLE_PLUGIN"])
+                       + ([] if node else ["node on PATH"])}
+    for n in names:
+        if needs.get(n):
+            sys.exit(f"`{n}` needs {', '.join(needs[n])}")
+    run = names or [n for n in FEATURES if not needs.get(n)]
+    for n in (n for n in FEATURES if n not in run and not names):
+        print(f"  skip {n}: needs {', '.join(needs[n])}", flush=True)
+    os.environ["HERMES_SRC"] = HERMES_SRC
+    areas = list(dict.fromkeys(FEATURES[n][0] for n in run))
+    log = f"{REPO}/evidence/acceptance/te-test-{time.strftime('%Y%m%dT%H%M%S')}.log"
+    os.makedirs(os.path.dirname(log), exist_ok=True)
+    results = []
+    with open(log, "w") as fh:
+        acc = [a for a in areas if a != "chisle"]
+        if acc:
+            p = subprocess.Popen(["/usr/bin/python3", f"{HERE}/acceptance.py", *acc], cwd=REPO,
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            for line in p.stdout:
+                fh.write(line)
+                m = re.match(r"(PASS|FAIL) (A\d+)\w* (.*?) :: ", line)
+                if m:
+                    results.append((m[2], m[3], m[1] == "PASS"))
+                    print(f"  {m[1].lower():4} {m[3]}", flush=True)
+            p.wait()
+        if "chisle" in areas:                       # one harness process at a time
+            node_dir = f"{REPO}/sandbox/bin-node"   # only node, not its whole directory
+            os.makedirs(node_dir, exist_ok=True)
+            if not os.path.exists(f"{node_dir}/node"):
+                os.symlink(node, f"{node_dir}/node")
+            p = subprocess.run(["/usr/bin/python3", f"{HERE}/chisle_conflict.py"], cwd=REPO,
+                               capture_output=True, text=True,
+                               env=dict(os.environ, HX_WITH_CHISLE="1",
+                                        HX_PATH_PREFIX=node_dir))
+            fh.write(p.stdout + p.stderr)
+            try:
+                rep = json.loads(p.stdout[p.stdout.index("{"):])
+            except ValueError:
+                rep = {}
+            results.append(("chisle", "the guard decided on a redirect in a real looping turn",
+                            bool(rep.get("guard_decisions_at"))))
+            results.append(("chisle", f"no redirect lost (lost: {rep.get('lost', '?')})",
+                            rep.get("lost") == []))
+    print(f"full evidence: {log}")
+    return summary(results)
+
+
+def live(profile):
+    try:
+        import yaml
+    except ImportError:             # PyYAML lives in the Hermes environment
+        if os.environ.get("TE_TEST_REEXEC"):
+            sys.exit(f"PyYAML cannot be imported by {HERMES_PY}")
+        os.environ["TE_TEST_REEXEC"] = "1"
+        os.execv(HERMES_PY, [HERMES_PY, os.path.abspath(__file__), "live", profile])
+    home = os.path.expanduser(f"~/.hermes/profiles/{profile}")
+    if profile == "default":
+        home = os.path.expanduser("~/.hermes")
+    cfg = (yaml.safe_load(open(f"{home}/config.yaml")) or {}).get("plugins") or {}
+    entry = ((cfg.get("entries") or {}).get("tokeneconomizer") or {}).get("settings") or {}
+    state = os.path.expanduser(entry.get("state_root") or "~/.tokeneconomizer")
+    results = []
+
+    def check(name, ok):
+        results.append(("live", name, bool(ok)))
+        print(f"  {'pass' if ok else 'FAIL'} {name}", flush=True)
+
+    check("plugin enabled in the profile's config", "tokeneconomizer" in (cfg.get("enabled") or []))
+    d = subprocess.run(["diff", "-rq", "-x", "__pycache__", f"{REPO}/plugin/tokeneconomizer",
+                        f"{home}/plugins/tokeneconomizer"], capture_output=True, text=True)
+    head = subprocess.run(["git", "-C", REPO, "log", "--oneline", "-1"],
+                          capture_output=True, text=True).stdout.strip()[:60]
+    check(f"installed copy is identical to this checkout ({head})"
+          + ("" if d.returncode == 0 else f"; differs: {d.stdout.strip().splitlines()[:3]}"),
+          d.returncode == 0)
+    doc = subprocess.run(["hermes", "-p", profile, "te", "doctor"], capture_output=True,
+                         text=True, cwd=os.path.expanduser("~"), timeout=120)
+    check("`te doctor`: vendored upstream code intact, no plugin errors logged",
+          doc.returncode == 0 and re.search(r"vendor .*: intact", doc.stdout)
+          and re.search(r"errors\.log\s+none", doc.stdout))
+    calls = []
+    try:
+        calls = [json.loads(l) for l in open(f"{state}/optimizer.jsonl")][-10:]
+    except (OSError, ValueError):
+        pass
+    bad = [c.get("status") for c in calls if c.get("status") != "ok"]
+    if calls:
+        check(f"last {len(calls)} optimizer model calls succeeded ({calls[-1].get('model')})"
+              + (f"; not ok: {bad}" if bad else ""), not bad)
+    else:
+        print("  skip optimizer model calls: none made yet")
+    # Discord chats with a user message, started in the last 48 h (not the last 2 min) and not
+    # before the plugin's first session here: a chat begun earlier was never the plugin's to follow.
+    if not os.path.exists(f"{home}/state.db"):
+        print("  skip Discord chats followed by the plugin: this profile has no sessions yet")
+        return summary(results)
+    db = sqlite3.connect(f"file:{home}/state.db?mode=ro", uri=True)
+    now, logs = time.time(), f"{state}/hermes-sessions"
+    since = now - 172800
+    try:
+        since = max(since, min(json.loads(open(f"{logs}/{f}").readline())["timestamp"]
+                               for f in os.listdir(logs) if f.endswith(".jsonl")))
+    except (OSError, ValueError, KeyError):
+        pass
+    chats = [r[0] for r in db.execute(
+        "select id from sessions s where coalesce(created_source, source) = 'discord' "
+        "and started_at between ? and ? and exists (select 1 from messages m "
+        "where m.session_id = s.id and m.role = 'user')", (since, now - 120))]
+    missed = [c for c in chats if not os.path.exists(f"{logs}/{c}.jsonl")]
+    if chats:
+        check(f"Discord chats since {time.strftime('%b %d %H:%M', time.localtime(since))} followed "
+              f"by the plugin: {len(chats) - len(missed)}"
+              f"/{len(chats)}" + (f"; not followed: {[c[-6:] for c in missed[:5]]}" if missed else ""),
+              not missed)
+    else:
+        print("  skip Discord chats followed by the plugin: no Discord chats in the last 48 h")
+    status = subprocess.run(["hermes", "-p", profile, "te", "status"], capture_output=True,
+                            text=True, cwd=os.path.expanduser("~"), timeout=120).stdout
+    print("\n".join(l for l in status.splitlines()
+                    if l.strip().startswith(("config", "sessions", "microskills", "toolprune",
+                                             "loopguard"))))
+    return summary(results)
+
+
+if __name__ == "__main__":
+    mode, rest = (sys.argv[1:2] or ["offline"])[0], sys.argv[2:]
+    if mode != "list" and not os.path.exists(HERMES_PY):
+        sys.exit(f"no Hermes install at {HERMES_SRC} (looked for venv/bin/python): "
+                 "set HERMES_SRC to the Hermes source directory")
+    if mode == "offline":
+        sys.exit(offline())
+    if mode == "real":
+        sys.exit(real(rest))
+    if mode == "live":
+        sys.exit(live((rest or ["default"])[0]))
+    if mode == "list":
+        for name, (area, what) in FEATURES.items():
+            print(f"{name:11} {what}")
+        sys.exit(0)
+    sys.exit(__doc__)

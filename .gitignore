@@ -1,0 +1,10 @@
+sandbox/
+evidence/
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+.venv/
+.pytest_cache/
+.tokeneconomizer/

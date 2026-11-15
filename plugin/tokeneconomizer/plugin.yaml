@@ -1,0 +1,5 @@
+name: tokeneconomizer
+version: "0.1.0+hermes.1"
+description: TokenEconomizer for Hermes - learned repository micro-facts, tool pruning, loop guard and repository map, reusing pinned upstream TokenEconomizer (7042ea8).
+author: TokenEconomizer Hermes adapter (local)
+provides_hooks: [pre_llm_call, pre_tool_call, post_tool_call, transform_tool_result, transform_llm_output, post_api_request, on_session_end, on_session_finalize, on_session_reset, subagent_start]

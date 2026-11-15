@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# One real one-shot Hermes turn in the root's repo (test model + key from the root config).
+# Usage: harness/turn <root> <label> <prompt> [hermes args...]; evidence -> <root>/runs/<label>.*
+set -uo pipefail
+W="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+R="$1"; L="$2"; P="$3"; shift 3
+mkdir -p "$R/runs"; cd "$R/repo"
+S=$(date +%s.%N)
+HX_ROOT="$R" timeout 600 "$W/harness/hx" -z "$P" --in "$R/repo" --usage-file "$R/runs/$L.usage.json" "$@" > "$R/runs/$L.out" 2> "$R/runs/$L.err"
+rc=$?
+E=$(echo "$(date +%s.%N) - $S" | bc)
+echo "{\"label\":\"$L\",\"rc\":$rc,\"elapsed_s\":$E}" > "$R/runs/$L.meta.json"
+echo "[$L] rc=$rc elapsed=${E}s"; tail -c 600 "$R/runs/$L.out"; echo
