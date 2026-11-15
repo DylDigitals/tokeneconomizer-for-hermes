@@ -30,14 +30,17 @@ measurement limits and remaining rollout work.
 
 ### Upstream's own Hermes plugin
 
-Upstream now ships an experimental Hermes plugin (`plugin/hermes` in its repository). By its
-README it covers learned facts and the loop guard on the classic CLI and one-shot runs, tested on
-Hermes 0.22.5. It does not prune tools and does not follow messaging platforms, scheduled jobs or
-sub-agents.
+Upstream ships an experimental Hermes plugin (`plugin/hermes` in its repository). It covers learned
+facts and the loop guard on the classic CLI and one-shot runs; its README says it was tested on
+Hermes 0.22.5 only. Hermes plugin hooks also run in the gateway, but upstream's plugin does not
+follow gateway sessions, sub-agents or scheduled jobs, and it does not prune tools.
 
-This plugin also covers tool pruning, gateway sessions (Discord, API server), scheduled jobs,
-sub-agents and a `/te` command inside chats. If upstream's coverage is enough for you, use
-upstream's: it is maintained with the rest of TokenEconomizer.
+This plugin uses the rest of Hermes's plugin interface. It adds tool pruning, the repository map and
+a `/te` command inside chats, and it covers gateway sessions (Discord, API server) and sub-agents.
+It also follows scheduled jobs, which are not tested yet. The gap is reported upstream in
+[microsoft/TokenEconomizer#232](https://github.com/microsoft/TokenEconomizer/issues/232). If
+upstream's coverage is enough for you, use upstream's: it is maintained with the rest of
+TokenEconomizer.
 
 ## Install
 
