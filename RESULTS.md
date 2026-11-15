@@ -36,9 +36,14 @@ These are recorded results from that checkpoint, not new runs performed during d
 
 ### Remaining rollout work
 
-That named profile is the verified installation. Other profiles on it are not rolled out. Before expanding, configure another profile's own state root and optimizer,
-set pruning to `propose` before enablement, and verify a fresh chat on its actual provider.
-Keep learned state and hide approvals separate; do not copy one profile's 89 choices to another.
+Three more profiles on the same installation were enabled on 2026-11-14 (two coding profiles, one
+on a Claude subscription provider and one on an OpenAI-compatible Codex proxy, plus one social
+media profile). Each has its own state root, its own optimizer on `deepseek-v4.1-flash`, pruning
+set to `propose` before enablement and its own never-hide list. The plugin loaded into the
+running gateway without a restart. One fresh chat per profile on its own model was observed and
+folded, with the request middleware seeing the tool catalog on both provider types; one coding
+profile's Discord chats are followed. No hide list has been proposed or applied on them yet.
+
 Measure other providers before claiming equivalent savings. Historical-session import stays
 unsupported; the repository map remains optional.
 
